@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 # http://www.twse.com.tw/exchangeReport/MI_INDEX?response=html&date=20170524&type=ALLBUT0999
+#%%
 
 import os
 import re
@@ -10,20 +11,27 @@ import string
 import logging
 import requests
 import argparse
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
 
-from os import mkdir
-from os.path import isdir
+from pg import load_config, insert_data
+
+#%%
+
+# +
+# from os import mkdir
+# from os.path import isdir
 
 # +
 class Crawler():
-    def __init__(self, prefix="data"):
-        ''' Make directory if not exist when initialize '''
+    def __init__(self, prefix="data", logger: logging.Logger = None):
+        """ Make directory if not exist when initialize """
 
         self.prefix = prefix
+        self.logger = logger if logger is not None else logging.getLogger(__name__)
         for sub_dir in ["tse", "otc"]:
             os.makedirs(os.path.join(self.prefix, sub_dir), exist_ok=True)
 
@@ -64,7 +72,6 @@ class Crawler():
         date_str_mingguo = '{0}/{1:02d}/{2:02d}'.format(date_tuple[0] - 1911, date_tuple[1], date_tuple[2])
 
         
-        
         for data in content['data9']:  # json data key
             print(type(data), len(data))
             sign = '-' if data[9].find('green') > 0 else ''
@@ -85,6 +92,7 @@ class Crawler():
     def get_tse_data(self, date_tuple):
         
         date_str = '{0}{1:02d}{2:02d}'.format(date_tuple[0], date_tuple[1], date_tuple[2])
+        date_Ymd = '{0}-{1:02d}-{2:02d}'.format(date_tuple[0], date_tuple[1], date_tuple[2])
         url = 'http://www.twse.com.tw/exchangeReport/MI_INDEX'
 
         query_params = {
@@ -103,23 +111,25 @@ class Crawler():
 
         content = page.json()
 
-        tse_data = pd.DataFrame(content["data9"], 
-                                columns=["證券代號", 
-                                                "證券名稱", 
-                                                "成交股數",
-                                                "成交筆數",
-                                                "成交金額",
-                                                "開盤價",
-                                                "最高價",
-                                                "最低價",
-                                                "收盤價",
-                                                "漲跌(+/-)",
-                                                "漲跌價差",
-                                                "最後揭示買價",
-                                                "最後揭示買量",
-                                                "最後揭示賣價",
-                                                "最後揭示賣量",
-                                                "本益比"])
+        tse_data = pd.DataFrame(content["data9"],
+                                columns=["證券代號",
+                                         "證券名稱",
+                                         "成交股數",
+                                         "成交筆數",
+                                         "成交金額",
+                                         "開盤價",
+                                         "最高價",
+                                         "最低價",
+                                         "收盤價",
+                                         "漲跌(+/-)",
+                                         "漲跌價差",
+                                         "最後揭示買價",
+                                         "最後揭示買量",
+                                         "最後揭示賣價",
+                                         "最後揭示賣量",
+                                         "本益比"])
+
+        tse_date = pd.DataFrame([date_Ymd for _ in range(tse_data.shape[0])], columns=["日期"])
 
         # 跌 => 漲跌價差補上負號
         diff_prices = tse_data["漲跌價差"].values
@@ -138,6 +148,8 @@ class Crawler():
                 tse_data.astype({col: "float"})
             except Exception as e:
                 print(col, e)
+        
+        tse_data = pd.concat([tse_date, tse_data], axis=1)
         
         return tse_data
 
@@ -216,51 +228,74 @@ class Crawler():
 #         print('Crawling {}'.format(date_tuple))
 #         self._get_tse_data(date_tuple)
 #         self._get_otc_data(date_tuple)
-        
-        
-    def get_data(self, start_date, end_date, output_dir: str = None):
+
+    def get_data(self, start_date, end_date, to_csv: bool = False, to_db: str = None, wait_seconds: int = 300):
         start_date = datetime(start_date[0], start_date[1], start_date[2])
         end_date = datetime(end_date[0], end_date[1], end_date[2])
         current = start_date
         while current <= end_date:
-            print(">>> {}".format(current))
+            time.sleep(wait_seconds)
+            self.logger.info(">>> {}".format(current))
+
             try:
                 tse_data = self.get_tse_data(current.timetuple()[0:3])
-                tse_data.to_csv(os.path.join(self.prefix, "tse", "tse_{}.csv".format(current.strftime("%Y%m%d"))), 
-                                index=False, encoding="utf-8-sig")
+                if to_csv:
+                    tse_data.to_csv(os.path.join(self.prefix, "tse", "tse_{}.csv".format(current.strftime("%Y%m%d"))), 
+                                    index=False, 
+                                    encoding="utf-8-sig")
+                if to_db is not None:
+                    insert_data(tse_data, tablename="listed_daily", config=to_db)
+
             except Exception as e:
-                print("  get tse data failed!\n  {}\n".format(e))
+                self.logger.error("  get tse data failed!\n  {}\n".format(e))
+
             try: 
                 otc_data = self.get_otc_data(current.timetuple()[0:3])
-                otc_data.to_csv(os.path.join(self.prefix, "otc", "otc_{}.csv".format(current.strftime("%Y%m%d"))), 
-                                index=False, encoding="utf-8-sig")
+                if to_csv:
+                    otc_data.to_csv(os.path.join(self.prefix, "otc", "otc_{}.csv".format(current.strftime("%Y%m%d"))), 
+                                    index=False, 
+                                    encoding="utf-8-sig")
+                if to_db is not None:
+                    insert_data(otc_data, tablename="otc_daily", config=to_db)
             except Exception as e:
-                print("  get otc data failed!\n {}\n".format(e))
-            current += timedelta(days=1)
+                self.logger.error("  get otc data failed!\n {}\n".format(e))
+
+            if current == end_date:
+                return {"tse": tse_data, "otc": otc_data}
 # -
+            current += timedelta(days=1)
+            
 
-datetime(2021, 1, 10)
+def main(args, log_dir: str = "log"):
+    
+    os.makedirs(log_dir, exist_ok=True)
+    fmt = logging.Formatter(fmt="%(asctime)s [%(levelname)s] %(name)s (%(module)s-%(lineno)d): %(message)s",
+                            datefmt="%Y-%m-%d %H:%M:%S")
 
+    logger = logging.getLogger("stock_data_crawler")
+    logger.setLevel(logging.INFO)
 
-def main():
-    # Set logging
-    if not os.path.isdir('log'):
-        os.makedirs('log')
-    logging.basicConfig(filename='log/crawl-error.log',
-        level=logging.ERROR,
-        format='%(asctime)s\t[%(levelname)s]\t%(message)s',
-        datefmt='%Y/%m/%d %H:%M:%S')
+    fileHandler = logging.FileHandler("{}/stock_data_crawler_{}.log".format(log_dir, datetime.now().strftime("%Y%m%d")),
+                                      mode="w",
+                                      encoding="utf_8_sig", 
+                                      delay=False)
+    
+    fileHandler.setLevel(logging.INFO)
+    fileHandler.setFormatter(fmt)
+    logger.addHandler(fileHandler)
 
-    # Get arguments
-    parser = argparse.ArgumentParser(description='Crawl data at assigned day')
-    parser.add_argument('day', type=int, nargs='*',
-        help='assigned day (format: YYYY MM DD), default is today')
-    parser.add_argument('-b', '--back', action='store_true',
-        help='crawl back from assigned day until 2004/2/11')
-    parser.add_argument('-c', '--check', action='store_true',
-        help='crawl back 10 days for check data')
+    start_date = datetime.strptime(str(args.start_date), "%Y%m%d")
+    end_date = datetime.strptime(str(args.end_date), "%Y%m%d")
+    crawler = Crawler(logger=logger)
 
-    args = parser.parse_args()
+    print((start_date.year, start_date.month, start_date.day), (end_date.year, end_date.month, end_date.day))
+    
+    # content = crawler.get_data((start_date.year, start_date.month, start_date.day), 
+    #                            (end_date.year, end_date.month, end_date.day))
+    
+    # return content
+
+    # sys.exit()
 
     # Day only accept 0 or 3 arguments
     if len(args.day) == 0:
@@ -284,7 +319,7 @@ def main():
 
         while error_times < max_error and first_day >= last_day:
             try:
-                crawler.get_data((first_day.year, first_day.month, first_day.day))
+                tse_data = crawler.get_data((first_day.year, first_day.month, first_day.day))
                 error_times = 0
             except:
                 date_str = first_day.strftime('%Y/%m/%d')
@@ -294,18 +329,62 @@ def main():
             finally:
                 first_day -= timedelta(1)
     else:
-        crawler.get_data((first_day.year, first_day.month, first_day.day))
+        tse_data = crawler.get_data((first_day.year, first_day.month, first_day.day))
 
-# !dir
+    return tse_data
 
+#%%
+        
+@dataclass(init=True, repr=True, eq=True, order=False, unsafe_hash=False, frozen=False,
+           match_args=True, kw_only=True, slots=False)
+class TSECrawlerArguments:
+    datetime_now: datetime = datetime.now()
+    start_year: int = field(default=datetime_now.year)
+    start_month: int = field(default=datetime_now.month)
+    start_day: int = field(default=datetime_now.day)
+    start_date: str = field(default=datetime_now.strftime("%Y%m%d"))
+    end_year: int = field(default=datetime_now.year)
+    end_month: int = field(default=datetime_now.month)
+    end_day: int = field(default=datetime_now.day)
+    end_date: str = field(default=datetime_now.strftime("%Y%m%d"))
+
+
+
+#%%
 if __name__ == '__main__':
-#     main()
 
-    datetime.today().day
+    dt_now = datetime.now()
+    dt_now
+
+    default_start_date = int("{0}{1:02d}{2:02d}".format(dt_now.year, dt_now.month, dt_now.day))
+    default_end_date = default_start_date
+    
+    tesc_args = TSECrawlerArguments(start_date="20240410", end_date="20240420")
+    content = main(tesc_args)
+    sys.exit()
+
+    # Get arguments
+    parser = argparse.ArgumentParser(description='Crawl data at assigned day')
+    parser.add_argument('-s', '--start_date', type=int, default=default_start_date, help='start date YYYYmmdd')
+    parser.add_argument('-e', '--end_date', type=int, default=default_end_date, help='end date YYYYmmdd')
+
+    parser.add_argument('day', type=int, nargs='*',
+        help='assigned day (format: YYYY MM DD), default is today')
+    parser.add_argument('-b', '--back', action='store_true',
+        help='crawl back from assigned day until 2004/2/11')
+    parser.add_argument('-c', '--check', action='store_true',
+        help='crawl back 10 days for check data')
+
+    args = parser.parse_args()
+    print(args)
+    main(args)
+
+    sys.exit()
+    
 
     crawl = Crawler("data")
 #     crawl.get_data((2023, 1, 9))
-    content = crawl.get_data((2023, 4, 30), (2023, 5, 2), "d")
+    content = crawl.get_data((2013, 1, 1), (2023, 5, 2))
 #     content = crawl.get_otc_data((2023, 4, 22))
 #     content = crawl.get_tse_data((2023, 4, 25))
 #     content = crawl.get_otc_data((2023, 4, 25))
@@ -336,3 +415,5 @@ if __name__ == '__main__':
 
 
 
+
+# %%
