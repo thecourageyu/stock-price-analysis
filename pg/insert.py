@@ -1,10 +1,10 @@
-#%%
+# %%
 from typing import List, Optional, Union
 import psycopg2
 
 from .config import load_config
 
-#%%
+# %%
 import os
 import pandas as pd
 
@@ -32,7 +32,7 @@ def build_insert_cmd(tse_data: pd.DataFrame, table_name: Optional[str] = "listed
     values = values[:-2]
     return INSERT_TEMPLATE.format(table_name=table_name, columns=columns, values=values)
 
-#%%
+# %%
 
 def insert_data(filename: Union[str, pd.DataFrame], tablename: str, config: str):
     """ Insert a new vendor into the vendors table """
@@ -41,6 +41,8 @@ def insert_data(filename: Union[str, pd.DataFrame], tablename: str, config: str)
     #          VALUES(%s) RETURNING vendor_id;"""
     if isinstance(filename, str):
         input_data = pd.read_csv(filename)
+    else:
+        input_data = filename
 
     sql = build_insert_cmd(input_data, table_name=tablename)
     
@@ -66,7 +68,7 @@ def insert_data(filename: Union[str, pd.DataFrame], tablename: str, config: str)
         return sql
 
 
-#%%
+# %%
 def insert_vendor(vendor_name, filename: str):
     """ Insert a new vendor into the vendors table """
 
@@ -149,7 +151,7 @@ def insert(vendor_list: List, filename: str):
         return rows
 
 
-#%%
+# %%
 if __name__ == '__main__':
 
     import sys

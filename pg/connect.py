@@ -13,5 +13,6 @@ def connect(config):
 
 
 if __name__ == '__main__':
-    config = load_config("C:/Users/YuZhe/OneDrive - Foxconn/Project/tsec/pg/database.ini")
+    # config = load_config("C:/Users/YuZhe/OneDrive - Foxconn/Project/tsec/pg/database.ini")
+    config = load_config("C:/Users/YuZhe/OneDrive - Foxconn/Project/tsec/pg/mes.ini")
     connect(config)
